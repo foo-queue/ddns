@@ -7,7 +7,15 @@ param(
     [int]$ForceUpdatePeriodInDays = 10 #days
 )
 
+if (!$Username -or !$Password) {
+    Write-Error 'Must supply user name and password.'
+    return
+}
+
 $credential = New-Object System.Management.Automation.PSCredential ($Username, $Password)
+if (!$credential) {
+    return
+}
 
 function trace($message) {
     Write-Output ((Get-Date).ToString('u') + ': ' + $message)
