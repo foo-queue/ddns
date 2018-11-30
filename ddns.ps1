@@ -1,65 +1,105 @@
 [CmdletBinding()]
 param(
-    [string]$Hostname = 'home.dingletech.com',
+    [string]$Hostname,
     [string]$Username,
-    [securestring]$Password, # ConvertTo-SecureString 'foo' -AsPlainText -Force
+    [securestring]$Password, # ConvertTo-SecureString '...' -AsPlainText -Force
+    [string]$EmailUsername,
+    [securestring]$EmailPassword,
     [int]$UpdatePeriodInMin = 10, #minutes
     [int]$ForceUpdatePeriodInDays = 10 #days
 )
 
-if (!$Username -or !$Password) {
-    Write-Error 'Must supply user name and password.'
-    return
-}
-
-$credential = New-Object System.Management.Automation.PSCredential ($Username, $Password)
-if (!$credential) {
-    return
-}
+# Scheduled task command:
+# PowerShell.exe -WindowStyle Hidden -ExecutionPolicy ByPass -NoProfile -NoLogo -Noninteractive -Command &{ Start-Transcript -Path 'C:\dev\ddns\log.txt' -Append; C:\dev\ddns\ddns.ps1 -Hostname 'example.com' -Username 'joe' -Password (ConvertTo-SecureString '...' -AsPlainText -Force) -EmailUsername 'joe@gmail.com' -EmailPassword (ConvertTo-SecureString '...' -AsPlainText -Force) -Verbose; Stop-Transcript }
 
 function trace($message) {
-    Write-Output ((Get-Date).ToString('u') + ': ' + $message)
+    Write-Output ([datetime]::Now.ToString('u') + ': ' + $message)
 }
 
-$lastip = 'unk'
-$forceUpdate = (Get-Date).AddDays($ForceUpdatePeriodInDays)
-while ($true) {
+try {
+    if (!$Hostname) { throw 'Must supply hostname.' }
+    if (!$Username) { throw 'Must supply user name.' }
+    if (!$Password) { throw 'Must supply password.' }
+    $credential = [pscredential]::new($Username, $Password)
 
-    $sleepMinutes = $UpdatePeriodInMin
-    try {
-        trace 'Fetching IP...'
-        $ip = Invoke-RestMethod -Uri 'https://api.ipify.org' -ea Stop
-        trace "IP: $ip"
+    if ($EmailUsername)  {
+        $emailCredential = [pscredential]::new($EmailUsername, $EmailPassword)
+    }
+    $script:noEmailUntil = [datetime]::Now.AddMinutes(5)
+    function sendEmail($Subject, $Body) {
+        if ($EmailUsername -and [datetime]::Now -ge $noEmailUntil)  {
+            trace "Sending email to $EmailUsername : '$Subject' : $Body"
+            Send-MailMessage -SmtpServer 'smtp.gmail.com' -Port 587 -UseSsl -Credential $emailCredential -to $EmailUsername -From $EmailUsername -Subject $Subject -Body $Body -ea Continue
+            $script:noEmailUntil = [datetime]::Now.AddMinutes(30)
+        }
+    }
+    
+    $lastip = 'unk'
+    $sleepMinutes = 0
+    $forceUpdate = [datetime]::Now.AddDays($ForceUpdatePeriodInDays)
+    while ($true) {
 
-        if ($ip -ne $lastip -OR (Get-Date) -ge $forceUpdate) {
+        if ($sleepMinutes -gt 0) {
+            trace "Sleeping for $sleepMinutes minutes..."
+            Start-Sleep -Seconds ($sleepMinutes * 60)
+        }
 
-            $url = "https://domains.google.com/nic/update?hostname=$Hostname&myip=$ip"
+        try {
+            trace 'Fetching IP...'
+            $ip = Invoke-RestMethod -Uri 'https://api.ipify.org' -ea Stop
+            trace "IP: $ip"
+        }
+        catch {
+            $_ | Write-Error
+            sendEMail -Subject 'DDNS Error: Failed to query IP' -Body "$url returned: $res"
+            $sleepMinutes = 5
+            continue
+        }
+
+        if ($ip -eq $lastip) {
+            trace 'No change in IP.'
+            if ([datetime]::Now -lt $forceUpdate) {
+                $sleepMinutes = $UpdatePeriodInMin
+                continue
+            }
+        }
+
+        $url = "https://domains.google.com/nic/update?hostname=${Hostname}&myip=${ip}"
+        try {
             trace "Updating DNS: $url"
             $res = Invoke-RestMethod $url -Credential $credential -ea Stop
             trace "Result: $res"
-    
-            if ($res -match "(good|nochg) (\d+\.\d+\.\d+\.\d+)") {
-                trace 'Success.'
-                $lastip = $Matches[2]
-                $forceUpdate = (Get-Date).AddDays($ForceUpdatePeriodInDays)
-            }
-            elseif ($res -eq '911') {
-                trace 'Error on Google''s end. Waiting 5 minutes.'
-                $sleepMinutes = 5
-            }
-            else {
-                Write-Error "We're doing something wrong! Quiting."
-                return
-            }
-        } else {
-            trace 'No change in IP.'
+        }
+        catch {
+            $_ | Write-Error
+            sendEMail -Subject 'DDNS Error: Update DNS failed' -Body "Invoke-RestMethod '$url' failed:`n$_"
+            $sleepMinutes = 5
+            continue
+        }
+
+        if ($res -match "(good|nochg) (\d+\.\d+\.\d+\.\d+)") {
+            trace 'Success.'
+            $lastip = $Matches[2]
+            $sleepMinutes = $UpdatePeriodInMin
+            $forceUpdate = [datetime]::Now.AddDays($ForceUpdatePeriodInDays)
+        }
+        elseif ($res -eq '911') {
+            trace 'Error on Google''s end.'
+            $sleepMinutes = 5
+        }
+        else {
+            sendEMail -Subject 'DDNS Error: Failed to update DNS' -Body "$url says '$res'"
+            # We are likely doing something wrong.
+            # Sleep long time to avoid getting in trouble with Google
+            $sleepMinutes = 120
         }
     }
-    catch {
-        $_ | Write-Error
-        $sleepMinutes = 1
+}
+catch {
+    if ($ErrorActionPreference -eq 'Stop') {
+        throw
     }
-
-    trace "Sleeping for $sleepMinutes minutes..."
-    Start-Sleep -Seconds ($sleepMinutes * 60)
+    if ($ErrorActionPreference -ne 'Ignore') {
+        $_ | Write-Error
+    }
 }
