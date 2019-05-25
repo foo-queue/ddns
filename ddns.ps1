@@ -13,7 +13,10 @@ param(
 # PowerShell.exe -WindowStyle Hidden -ExecutionPolicy ByPass -NoProfile -NoLogo -Noninteractive -Command &{ Start-Transcript -Path 'C:\dev\ddns\log.txt' -Append; C:\dev\ddns\ddns.ps1 -Hostname 'example.com' -Username 'joe' -Password (ConvertTo-SecureString '...' -AsPlainText -Force) -EmailUsername 'joe@gmail.com' -EmailPassword (ConvertTo-SecureString '...' -AsPlainText -Force) -Verbose; Stop-Transcript }
 
 function trace($message) {
-    Write-Output ([datetime]::Now.ToString('u') + ': ' + $message)
+    try {
+        Write-Output ([datetime]::Now.ToString('u') + ': ' + $message)
+    }
+    catch{}
 }
 
 try {
