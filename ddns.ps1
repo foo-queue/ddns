@@ -43,15 +43,15 @@ try {
             trace "Sleeping for $sleepMinutes minutes..."
             Start-Sleep -Seconds ($sleepMinutes * 60)
         }
-
+        
         try {
             trace 'Fetching IP...'
             $ip = Invoke-RestMethod -Uri 'https://api.ipify.org' -ea Stop
             trace "IP: $ip"
         }
         catch {
-            $_ | Write-Error
-            sendEMail -Subject 'DDNS Error: Failed to query IP' -Body "$url returned: $res"
+            trace "ERROR: $_"
+            sendEMail -Subject 'DDNS Error: Failed to query IP' -Body "Invoke-RestMethod 'https://api.ipify.org' failed: $_"
             $sleepMinutes = 5
             continue
         }
@@ -71,8 +71,8 @@ try {
             trace "Result: $res"
         }
         catch {
-            $_ | Write-Error
-            sendEMail -Subject 'DDNS Error: Update DNS failed' -Body "Invoke-RestMethod '$url' failed:`n$_"
+            trace "ERROR: $_"
+            sendEMail -Subject 'DDNS Error: Update DNS failed' -Body "Invoke-RestMethod '$url' failed: $_"
             $sleepMinutes = 5
             continue
         }
@@ -100,6 +100,6 @@ catch {
         throw
     }
     if ($ErrorActionPreference -ne 'Ignore') {
-        $_ | Write-Error
+        Write-Error -ErrorRecord $_
     }
 }
