@@ -1,0 +1,11 @@
+// Save this file to ~/.ddns/config.json
+{
+  "records": [
+    {
+      "hostname": "home.example.com",
+      "username": "...",
+      "password": "...",
+      "ownerEmail": "john.doe@example.com"
+    }
+  ]
+}
