@@ -17,14 +17,14 @@ C:\dev\ddns\update-ddns.ps1
 The following powershell script will create a Scheduled Task which starts at logon of the current user and then runs every hour:
 
 ```powershell
-$xml = [xml](cat '.\update ddns task.xml')
-$xml.Task.Actions.Exec.Command = "`"$(gcm 'pwsh' | select -ExpandProperty Path)`""
+$xml = [xml](Get-Content '.\update ddns task.xml')
+$xml.Task.Actions.Exec.Command = '"' + (Get-Command pwsh).Path + '"'
 $xml.Task.Actions.Exec.Arguments = "-w hidden -ex bypass -noni -nop -c `"$(Convert-Path ./update-ddns.ps1)`""
 $xml.Task.RegistrationInfo.Date = [datetime]::UtcNow.ToString('o')
 $xml.Task.RegistrationInfo.Author = "$env:USERDOMAIN\$env:USERNAME"
 $xml.Task.Triggers.LogonTrigger.UserId = "$env:USERDOMAIN\$env:USERNAME"
 $xml.Task.Principals.Principal.UserId = (Get-CimInstance Win32_UserAccount -Filter "Name='$env:USERNAME'").SID
-$xml.Save('.\localuser.xml')
+$xml.Save("$PWD\localuser.xml")
 
 schtasks /create /tn 'Update DDNS' /xml '.\localuser.xml' /f
 del '.\localuser.xml'
