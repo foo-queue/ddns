@@ -14,23 +14,24 @@ C:\dev\ddns\update-ddns.ps1
 
 ## Run on a schedule
 
-The following powershell script will create a Scheduled Task which starts at logon of the current user and then runs every hour:
+The following powershell script will create a Scheduled Task which starts at logon of the current user and then runs daily at 8AM:
 
 ```powershell
-$xml = [xml](Get-Content '.\update ddns task.xml')
-$xml.Task.Actions.Exec.Command = '"' + (Get-Command pwsh).Path + '"'
-$xml.Task.Actions.Exec.Arguments = "-w hidden -ex bypass -noni -nop -c `"$(Convert-Path ./update-ddns.ps1)`""
-$xml.Task.RegistrationInfo.Date = [datetime]::UtcNow.ToString('o')
-$xml.Task.RegistrationInfo.Author = "$env:USERDOMAIN\$env:USERNAME"
-$xml.Task.Triggers.LogonTrigger.UserId = "$env:USERDOMAIN\$env:USERNAME"
-$xml.Task.Principals.Principal.UserId = (Get-CimInstance Win32_UserAccount -Filter "Name='$env:USERNAME'").SID
-$xml.Save("$PWD\localuser.xml")
+cd ~\Dev\Update-IPFilter
 
-schtasks /create /tn 'Update DDNS' /xml '.\localuser.xml' /f
-del '.\localuser.xml'
+New-ScheduledTask `
+    -Action (New-ScheduledTaskAction `
+        -Execute (Get-Command pwsh).Path `
+        -Argument '-nologo -nop -ep bypass -w hidden -f update-ddns.ps1' `
+        -WorkingDirectory $PWD) `
+    -Trigger `
+        (New-ScheduledTaskTrigger -AtLogOn),
+        (New-ScheduledTaskTrigger -Daily -At (Get-Date '08:00')) | `
+Register-ScheduledTask -TaskName 'Update DDNS' -Force
 
-# Run it now
-schtasks /run /tn 'Update DDNS'
+# Execute now:
+Start-ScheduledTask -TaskName 'Update DDNS'
 
-# Delete the task: schtasks /delete /tn 'Update DDNS' /f
+# Delete:
+# Unregister-ScheduledTask -TaskName 'Update DDNS'
 ```
