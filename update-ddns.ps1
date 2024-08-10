@@ -9,9 +9,11 @@ param(
 $ErrorActionPreference = 'Stop'
 $ProgressPreference = 'SilentlyContinue'
 
+$ConfigPath = Convert-Path -LiteralPath $ConfigPath
+$configDir = Split-Path $ConfigPath -Parent
 $config = Get-Content $ConfigPath -ea Stop | ConvertFrom-Json -ea Stop
-$config | Add-Member logPath "~/.ddns/output.log" -ea ignore
-$config | Add-Member statusPath "~/.ddns/status.json" -ea ignore
+$config | Add-Member logPath (Join-Path $configDir "output.log") -ea ignore
+$config | Add-Member statusPath (Join-Path $configDir "status.json") -ea ignore
 
 function trace {
     param(
@@ -35,59 +37,88 @@ if (Test-Path $config.statusPath) {
 }
 
 trace 'Fetching IPv4 from https://api.ipify.org...'
-$ip = Invoke-RestMethod -Uri https://api.ipify.org -ea Stop
-trace "IPv4: $ip"
+$ip4 = Invoke-RestMethod -Uri 'https://api.ipify.org?format=json' -ea Stop
+$ip6 = Invoke-RestMethod -Uri 'https://api6.ipify.org?format=json' -ea Continue
+$ip4 = $ip4.ip
+$ip6 = $ip6.ip
+trace "IPv4: $ip4"
+trace "IPv6: $ip6"
 
 foreach ($record in $config.records) {
     try {
-        trace "Updating $($record.hostname)..."
+        trace "Updating $($record.registrar) DNS record for $($record.recordName)..."
+
         $recordstatus = [ordered]@{
             timestamp  = [System.DateTimeOffset]::Now
             result     = $null
-            lastUpdate = $status[$record.hostname].lastUpdate
+            lastUpdate = $status[$record.recordName].lastUpdate
         }
 
-        if ($recordstatus.lastUpdate.ip -eq $ip) {
-            trace "No change since last update on $($recordstatus.lastUpdate.time)"
-            $recordstatus.result = 'unchanged'
-            continue
-        }
-        $updateArgs = @{
-            Method         = 'POST'
-            Uri            = "https://domains.google.com/nic/update?hostname=$([uri]::EscapeDataString($record.hostname))&myip=$([uri]::EscapeDataString($ip))"
-            Authentication = 'Basic'
-            Credential     = [pscredential]::new($record.Username, (ConvertTo-SecureString $record.Password -AsPlainText -Force))
-            Headers        = @{'user-agent' = 'update-ddns/1.0' }
-        }
-            
-        trace "Updating DNS via $($updateArgs.Uri)"
-        $response = Invoke-RestMethod @updateArgs -SkipHttpErrorCheck -ea SilentlyContinue
-            
-        if ($null -eq $response) {
-            # an error occurred sending the request
-            trace "Exception: $($Error[0].Exception)"
-            $recordstatus.result = 'exception'
-            $recordstatus.exception = $Error[0].Exception.Message
-        }
-        elseif ($response -match "(good|nochg) (\d+\.\d+\.\d+\.\d+)") {
-            # success
-            trace "Success: $response"
-            $recordstatus.result = 'success'
-            $recordstatus.lastUpdate = [ordered]@{
-                ip       = $Matches[2]
-                response = $Matches[1]
-                time     = $recordstatus.timestamp
+        switch ($record.registrar) {
+            "Cloudflare" {                
+                try {                    
+                    $baseUrl = 'https://api.cloudflare.com/client/v4'
+                    $headers = @{ Authorization = "Bearer $($record.apiToken)" }
+
+                    $resp = Invoke-RestMethod -Method GET -Uri "$baseUrl/zones" -Headers $headers
+                    $zone = $resp.result.where{ $_.name -eq $record.zoneName }
+                    if (@($zone).Count -ne 1) {
+                        Write-Error "DNS zone '$($record.zoneName)' not found."
+                        break
+                    }
+
+                    $resp = Invoke-RestMethod -Method GET -Uri "$baseUrl/zones/$($zone.id)/dns_records" -Headers $headers
+                    $dnsRecords = $resp.result.where{ $_.name -eq $record.recordName }
+                    if (@($dnsRecords).Count -eq 0) {
+                        Write-Error "DNS record '$($record.recordName)' not found."
+                        break
+                    }
+
+                    $recordstatus.lastUpdate = [ordered]@{
+                        time = $recordstatus.timestamp
+                    }
+
+                    foreach ($dnsRecord in $dnsRecords) {
+                        $patch = $null
+                        if ($dnsRecord.type -eq 'A') {
+                            $recordstatus.lastUpdate.ip4 = $ip4
+                            if ($dnsRecord.content -ne $ip4) {
+                                $patch = @{ content = $ip4 }
+                            }
+                            else {
+                                trace "IP4 unchanged ($($dnsRecord.content))."
+                            }
+                        }
+                        elseif ($dnsRecord.type -eq 'AAAA') {
+                            $recordstatus.lastUpdate.ip6 = $ip6
+                            if ($dnsRecord.content -ne $ip6) {
+                                $patch = @{ content = $ip6 }
+                            }
+                            else {
+                                trace "IP6 unchanged ($($dnsRecord.content))."
+                            }
+                        }
+                        if ($patch) {
+                            $resp = Invoke-RestMethod -Method PATCH -Uri "$baseUrl/zones/$($zone.id)/dns_records/$($dnsRecord.id)" -Body ($patch | ConvertTo-Json) -Headers $headers
+                            $dnsRecord = $resp.result
+                            trace "Success: Updated $($dnsRecord.name) $($dnsRecord.type) record with address $($dnsRecord.content)."
+                        }
+                    }
+                    $recordstatus.result = 'success'
+                }
+                catch {
+                    trace "Error: $($_.Exception.Message)"
+                    $recordstatus.result = 'error'
+                    $recordstatus.error = $_.Exception.Message
+                }
             }
-        }
-        else {
-            # error
-            trace "Error: $response"
-            $recordstatus.result = 'error'
-            $recordstatus.error = $response
+            Default {
+                Write-Error "Unknown registrar: $($record.registrar)."
+            }
         }
 
         # Update status file
-        $status[$record.hostname] = $recordstatus
+        $status[$record.recordName] = $recordstatus
         $status | ConvertTo-Json | Out-File -FilePath $config.statusPath
     }
     catch {

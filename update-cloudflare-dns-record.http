@@ -1,0 +1,33 @@
+@token = ...
+@zoneName = ...
+@recordName = ...
+
+// @name ip4Query
+GET https://api.ipify.org
+###
+// @name ip6Query
+GET https://api6.ipify.org
+###
+@ipAddr = {{ ip4Query.response.body.* }}
+@ip6Addr = {{ ip6Query.response.body.* }}
+
+// @name zones
+GET https://api.cloudflare.com/client/v4/zones
+Authorization: Bearer {{token}}
+###
+@zone_id = {{zones.response.body.$.result[?(@.name=="{{zoneName}}")].id}}
+
+// @name dnsRecords
+GET https://api.cloudflare.com/client/v4/zones/{{zone_id}}/dns_records
+Authorization: Bearer {{token}}
+###
+@dns_record_id = {{dnsRecords.response.body.$.result[?(@.name=="{{recordName}}" && @.type=="A")].id}}
+
+PATCH https://api.cloudflare.com/client/v4/zones/{{zone_id}}/dns_records/{{dns_record_id}}
+Authorization: Bearer {{token}}
+Content-Type: application/json
+
+{
+  "content": "{{ipAddr}}"
+}
+###

@@ -1,6 +1,6 @@
-# DDNS Registration Client for Google Domains
+# DDNS Registration Client for Cloudflare DNS
 
-A powershell script to update [dynamic DNS](https://support.google.com/domains/answer/6147083) records in [Google Domains](https://domains.google.com/).
+A powershell script to update [Cloudflare DNS](https://developers.cloudflare.com/api/operations/dns-records-for-a-zone-patch-dns-record) records in [cloudflare](https://www.cloudflare.com/products/registrar/).
 
 ## Usage
 
